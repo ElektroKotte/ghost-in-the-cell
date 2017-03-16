@@ -1,0 +1,6 @@
+[package]
+name = "ghost-in-the-cell"
+version = "0.1.0"
+authors = ["Emil Ohlsson <emil@kottlan.net>"]
+
+[dependencies]
