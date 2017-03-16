@@ -26,6 +26,10 @@ fn get_splitline() -> Vec<String> {
     get_line().split_whitespace().map(|tok| String::from(tok)).collect::<Vec<_>>()
 }
 
+/**** Controlling constants ****/
+
+const BORDER_LIMIT: isize = 3;
+
 /**** Game state helpers ****/
 
 enum Command {
@@ -67,12 +71,16 @@ impl Factory {
             bots: 0,
             production: 0,
             incoming: Vec::new(),
-            distances: vec![0; count],
+            distances: vec![std::isize::MAX; count],
         }
     }
     
     fn clear(&mut self) {
         self.incoming.clear();
+    }
+
+    fn is_interesting(&self) -> bool {
+        self.production > 0
     }
 }
 
@@ -96,6 +104,79 @@ impl GameState {
             f.clear();
         }
     }
+
+    /**
+     * Should return a list of indexes for the factories that should
+     * targets for operations this turn. This include owned factories
+     * that should be upgraded, are under attack. */
+    fn targets(&self) -> Vec<usize> {
+        let mut trgs = Vec::new();
+
+        /* First step, try to identify bordering factories */
+        for f in self.factories.iter().filter(|&f| f.owner > 0) {
+            let dist = f.distances.iter().min().unwrap() * BORDER_LIMIT;
+            let mut closest = f.distances.iter().enumerate().filter_map(
+                |(i, &d)| {
+                    if d < dist && self.factories[i].is_interesting() {Some(i)}
+                    else {None}
+                }).collect::<Vec<usize>>();
+            trgs.append(&mut closest);
+        }
+
+        /* Above algorithm didn't give any target, likely early in game, use fallback */
+        if trgs.len() == 0 {
+            let mut all = self.factories.iter().filter_map(|ref f| {
+                if f.is_interesting() { Some(f.id) }
+                else { None }
+            }).collect::<Vec<usize>>();
+            trgs.append(&mut all);
+        }
+
+        /* And add all owned factories as they are always targets */
+        let mut my = self.factories.iter().filter_map(|ref f| {
+            if f.owner > 0 { Some(f.id) }
+            else { None }
+        }).collect::<Vec<usize>>();
+        trgs.append(&mut my);
+
+        /* Sort and remove duplicates */
+        trgs.sort();
+        trgs.dedup();
+
+        return trgs;
+    }
+
+    fn moves_recursive(&self, targets: &Vec<usize>, i: usize, mut moves: Vec<Command>) -> Vec<Command> {
+        if i >= targets.len() {
+            return Vec::new();
+        } else {
+            // TODO return best of do a move, or not do a move
+            let j = targets[i];
+            if self.factories[j].owner <= 0 {
+                let new_moves = self.moves_recursive(&targets, i + 1, Vec::new());
+                moves.push(Command::Move {src: self.my_closest_to(j).unwrap(), dst: j, bots: 2});
+            }
+        }
+        return moves;
+    }
+
+    fn moves(&self, targets: Vec<usize>) -> Vec<Command> {
+        return self.moves_recursive(&targets, 0, Vec::new());
+    }
+
+    fn my_closest_to(&self, target: usize) -> Option<usize> {
+        self.factories.iter()
+            .filter(|ref f| f.owner > 0)
+            .min_by_key(|ref f| f.distances[target])
+            .map(|ref f| f.id)
+    }
+
+    fn closest_interesting_to(&self, target: usize) -> Option<usize> {
+        self.factories.iter()
+            .filter(|ref f| f.is_interesting())
+            .min_by_key(|ref f| f.distances[target])
+            .map(|ref f| f.id)
+    }
 }
 
 fn main() {
@@ -104,7 +185,7 @@ fn main() {
     
     let mut state = GameState::new(factory_count);
     
-    for i in 0..link_count {
+    for _ in 0..link_count {
         let inputs = get_splitline();
         let factory_1 = parse_input!(inputs[0], usize);
         let factory_2 = parse_input!(inputs[1], usize);
@@ -122,7 +203,7 @@ fn main() {
         
         /* Build game state */
         let entity_count = parse_input!(get_line(), usize);
-        for i in 0..entity_count {
+        for _ in 0..entity_count {
             let inputs = get_splitline();
             let id = parse_input!(inputs[0], usize);
             match inputs[1].as_str() {
@@ -143,49 +224,9 @@ fn main() {
             }
         }
 
-        /*
-        /* Generate list of moves */
-        for each factory
-            if not owned by my
-                - and has production, or is enemy
-                - asses threat level,
-                    - In how many turns can it be mine.
-                    - at what cost
-                    - Result is increased production, at cost of bots
-            if owned by me
-                - and has bots for enough to increase production.
-                - add the move to increase output
-                - Check threat level, does base need backup? Asses
-                    as negative output at cost of 
-        */    
+        let targets = state.targets();
+        let mut commands_new = state.moves(targets);
 
-        /* Find my base with most production */
-        for i in 0..state.factories.len() {
-            if state.factories[i].owner > 0 {
-                let mut dests = {
-                    let mut tmp = state.factories.iter().filter(|&f| {
-                        let has_production = f.production > 0;
-                        let isnt_me = f.owner <= 1;
-                        let enemy = f.owner < 0;
-                        (has_production && isnt_me) || enemy
-                    }).collect::<Vec<&Factory>>();
-                    tmp.sort_by_key(|&f| f.distances[i]);
-                    tmp.iter().map(|&f| f.id).collect::<Vec<usize>>()
-                };
-                for &d in dests.iter() {
-                    /* Dont attack same factory or myself */
-                    if i == d { continue; }
-                    if state.factories[d].owner > 0 { continue; }
-                    
-                    let bots = state.factories[i].bots / 2;
-                    if state.factories[i].bots - bots >= state.factories[i].production {
-                        state.factories[i].bots -= bots;
-                        commands.push(Command::Move{src: i, dst: d, bots: bots});
-                    }
-                }
-            }
-        }
-        
         if commands.len() > 0 {
             let output: String = commands.into_iter().map(String::from).collect::<Vec<String>>().join(";");
             println!("{}", output);
